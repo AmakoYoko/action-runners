@@ -249,8 +249,8 @@ jobs:
           K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
           lg "kickstart"; bounded sudo "$K" -activate -configure -access -on -restart -agent -privs -all -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" || true
           bounded sudo "$K" -configure -allowAccessFor -allUsers -privs -all || true
-          # le serveur propose d'abord l'authentification Apple (compte local + mot de passe) : on crée un compte dédié
-          lg "compte lamas"; bounded sudo sysadminctl -addUser lamas -fullName Lamas -password "$PW" -admin || true
+          # le serveur propose d'abord l'authentification Apple : on se connecte avec le compte de la session console (runner), sinon l'écran reste noir
+          lg "mot de passe runner"; bounded sudo dscl . -passwd /Users/runner "$PW" || true
           # écran noir sinon : on empêche la mise en veille de l'écran et on le réveille
           bounded sudo pmset -a displaysleep 0 sleep 0 disablesleep 1 || true
           nohup caffeinate -dimsu >/dev/null 2>&1 &
@@ -269,7 +269,7 @@ jobs:
         run: |
           IP=$("$(brew --prefix)/bin/tailscale" ip -4)
           curl -fsS -m 30 -X POST "$API/api/runner/ready" -H 'content-type: application/json' \
-            -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" --arg ip "$IP" --arg pw "$VNC_PW" '{vm_id:$v,token:$t,ip:$ip,rdpUser:"lamas",rdpPass:$pw}')"
+            -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" --arg ip "$IP" --arg pw "$VNC_PW" '{vm_id:$v,token:$t,ip:$ip,rdpUser:"runner",rdpPass:$pw}')"
       - name: Attendre l'échéance
         run: |
           while true; do
