@@ -260,6 +260,10 @@ jobs:
           done
           done
           sudo killall tccd 2>/dev/null || true
+          bounded dscl . -authonly lamas "$PW" || true
+          bounded sysadminctl -secureTokenStatus lamas || true
+          bounded sysadminctl -secureTokenStatus runner || true
+          bounded sh -c 'who; echo ---; dscl . -read /Users/lamas AuthenticationAuthority; fdesetup status; dscl . -read /Users/runner AuthenticationAuthority; sudo -u runner defaults read com.apple.screensaver' || true
           lg "launchctl"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           if [ -n "$SSH_KEY" ] && [ "$SSH_KEY" != "-" ]; then
             mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
