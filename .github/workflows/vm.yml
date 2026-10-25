@@ -11,7 +11,8 @@ on:
       ssh_key: { description: "Clé SSH publique", required: true }
       hostname: { description: "Nom d'hôte", required: true }
       app: { description: "owner/repo[@ref] à déployer (optionnel)", required: false, default: "" }
-permissions: {}
+permissions:
+  packages: read
 concurrency:
   group: vm-${{ inputs.vm_id }}
 jobs:
@@ -50,7 +51,10 @@ jobs:
           sudo systemctl start ssh || sudo service ssh start
       - name: Image du profil
         if: ${{ inputs.image != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null 2>&1 || true
           if docker pull "$IMAGE"; then
             docker run -d --name work --network host --restart no -v "$HOME/work:/work" -w /work "$IMAGE" sleep infinity
           else
