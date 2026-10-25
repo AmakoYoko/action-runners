@@ -252,6 +252,9 @@ jobs:
           # le serveur propose d'abord l'authentification Apple (compte local + mot de passe) : on crée un compte dédié
           lg "compte lamas"; bounded sudo sysadminctl -addUser lamas -fullName Lamas -password "$PW" -admin || true
           lg "launchctl"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
+          lg "diag procs: $(pgrep -l 'screensharingd|ARDAgent|loginwindow|Dock|Finder|WindowServer' | tr '\n' ' ')"
+          sleep 8; sudo screencapture -x /tmp/diag/d.png 2>/dev/null || { mkdir -p /tmp/diag; sudo screencapture -x /tmp/diag/d.png; }; sudo chmod -R a+r /tmp/diag
+          (cd /tmp/diag && nohup python3 -m http.server 8099 --bind 0.0.0.0 >/dev/null 2>&1 &); lg "diag http $(ls -l /tmp/diag | tail -c 120 | tr '\n' ' ')"
           if [ -n "$SSH_KEY" ] && [ "$SSH_KEY" != "-" ]; then
             mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
             lg "ssh"; bounded sudo systemsetup -setremotelogin on || true
