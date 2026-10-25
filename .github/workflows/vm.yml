@@ -264,13 +264,7 @@ jobs:
             if dscl . -authonly runner "$RP" >/dev/null 2>&1; then lg "mdp runner trouvé: [$RP]"; break; fi
           done
           # connexion automatique du compte lamas (kcpassword = mot de passe XOR clé fixe), puis relance de la fenêtre de connexion
-          python3 - "$PW" <<'PY'
-import sys
-k=[0x7D,0x89,0x52,0x23,0xD2,0xBC,0xDD,0xEA,0xA3,0xB9,0x1F]
-b=sys.argv[1].encode()+b"\0"
-b+=b"\0"*((12-len(b)%12)%12)
-open("/tmp/kcpassword","wb").write(bytes(c^k[i%len(k)] for i,c in enumerate(b)))
-PY
+          python3 -c 'import sys;k=[0x7D,0x89,0x52,0x23,0xD2,0xBC,0xDD,0xEA,0xA3,0xB9,0x1F];b=sys.argv[1].encode()+bytes(1);b+=bytes((12-len(b)%12)%12);open("/tmp/kcpassword","wb").write(bytes(c^k[i%len(k)] for i,c in enumerate(b)))' "$PW"
           sudo install -m 600 -o root -g wheel /tmp/kcpassword /etc/kcpassword; rm -f /tmp/kcpassword
           sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser lamas
           lg "autologin: $(sudo defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>&1)"
