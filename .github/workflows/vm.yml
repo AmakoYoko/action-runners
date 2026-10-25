@@ -244,7 +244,7 @@ jobs:
           # macOS n'a pas `timeout` : chaque commande système est bornée à 40 s (elles peuvent attendre une autorisation)
           bounded() { perl -e 'alarm shift; exec @ARGV' 40 "$@" >/tmp/bounded.log 2>&1; local rc=$?; lg "rc=$rc $(tr '\n' ' ' </tmp/bounded.log | tail -c 200)"; return $rc; }
           lg "début étape VNC ($(sw_vers -productVersion), $(uname -m))"
-          PW=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 8 || true)
+          PW=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | cut -c1-8)
           echo "::add-mask::$PW"; echo "VNC_PW=$PW" >> "$GITHUB_ENV"; lg "mot de passe généré (${#PW} car.)"
           K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
           lg "kickstart"; bounded sudo "$K" -activate -configure -access -on -restart -agent -privs -all -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" || true
