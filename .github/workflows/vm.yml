@@ -241,15 +241,15 @@ jobs:
         run: |
           set -o pipefail
           # macOS n'a pas `timeout` : chaque commande système est bornée à 40 s (elles peuvent attendre une autorisation)
-          bounded() { "$@" & local p=$!; ( sleep 40; kill -9 $p 2>/dev/null ) & local w=$!; wait $p 2>/dev/null; local rc=$?; kill $w 2>/dev/null; return $rc; }
+          bounded() { perl -e 'alarm shift; exec @ARGV' 40 "$@" >>/tmp/bounded.log 2>&1; local rc=$?; tail -3 /tmp/bounded.log; : > /tmp/bounded.log; return $rc; }
           PW=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 8)
           echo "::add-mask::$PW"; echo "VNC_PW=$PW" >> "$GITHUB_ENV"
           K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
-          echo "kickstart…"; bounded sudo "$K" -activate -configure -access -on -restart -agent -privs -all -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" 2>&1 | tail -3 || true
-          echo "launchctl…"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>&1 | tail -2 || true
+          echo "kickstart…"; bounded sudo "$K" -activate -configure -access -on -restart -agent -privs -all -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" || true
+          echo "launchctl…"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           if [ -n "$SSH_KEY" ] && [ "$SSH_KEY" != "-" ]; then
             mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-            echo "ssh…"; bounded sudo systemsetup -setremotelogin on 2>&1 | tail -2 || true
+            echo "ssh…"; bounded sudo systemsetup -setremotelogin on || true
           fi
           for i in $(seq 1 20); do nc -z 127.0.0.1 5900 && break; sleep 2; done
           nc -z 127.0.0.1 5900 && echo "VNC en écoute" || { echo "::warning::VNC non joignable"; sudo lsof -iTCP -sTCP:LISTEN -P 2>/dev/null | head -8; }
