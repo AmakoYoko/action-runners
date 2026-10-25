@@ -251,11 +251,13 @@ jobs:
           bounded sudo "$K" -configure -allowAccessFor -allUsers -privs -all || true
           # le serveur propose d'abord l'authentification Apple (compte local + mot de passe) : on crée un compte dédié
           lg "compte lamas"; bounded sudo sysadminctl -addUser lamas -fullName Lamas -password "$PW" -admin || true
-          # sans autorisation « Enregistrement de l'écran », le serveur de partage d'écran envoie une image noire (SIP est désactivé sur le runner)
+          # sans autorisation « Enregistrement de l'écran » (image noire) et « Accessibilité » (souris et clavier sans effet), le serveur de partage d'écran est bridé (SIP est désactivé sur le runner)
           TCC="/Library/Application Support/com.apple.TCC/TCC.db"
+          for SVC in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent kTCCServiceListenEvent; do
           for C in com.apple.screensharing.agent com.apple.screensharing.MessagesAgent com.apple.RemoteDesktop.agent com.apple.screensharing.server /System/Library/CoreServices/RemoteManagement/screensharingd.bundle/Contents/MacOS/screensharingd /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent /System/Library/CoreServices/RemoteManagement/ARDAgent.app; do
             T=0; case "$C" in /*) T=1;; esac
-            bounded sudo sqlite3 "$TCC" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,csreq,policy_id,indirect_object_identifier_type,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceScreenCapture','$C',$T,2,4,1,NULL,NULL,0,'UNUSED',0,CAST(strftime('%s','now') AS INTEGER))" || true
+            bounded sudo sqlite3 "$TCC" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,csreq,policy_id,indirect_object_identifier_type,indirect_object_identifier,flags,last_modified) VALUES ('$SVC','$C',$T,2,4,1,NULL,NULL,0,'UNUSED',0,CAST(strftime('%s','now') AS INTEGER))" || true
+          done
           done
           sudo killall tccd 2>/dev/null || true
           lg "launchctl"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
