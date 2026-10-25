@@ -240,19 +240,21 @@ jobs:
       - name: Bureau à distance (VNC) et SSH
         run: |
           set -o pipefail
+          lg() { curl -fsS -m 10 -X POST "$API/api/runner/log" -H 'content-type: application/json' -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" --arg l "$1" '{vm_id:$v,token:$t,line:$l}')" >/dev/null 2>&1 || true; }
           # macOS n'a pas `timeout` : chaque commande système est bornée à 40 s (elles peuvent attendre une autorisation)
-          bounded() { perl -e 'alarm shift; exec @ARGV' 40 "$@" >>/tmp/bounded.log 2>&1; local rc=$?; tail -3 /tmp/bounded.log; : > /tmp/bounded.log; return $rc; }
-          PW=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 8)
-          echo "::add-mask::$PW"; echo "VNC_PW=$PW" >> "$GITHUB_ENV"
+          bounded() { perl -e 'alarm shift; exec @ARGV' 40 "$@" >/tmp/bounded.log 2>&1; local rc=$?; lg "rc=$rc $(tr '\n' ' ' </tmp/bounded.log | tail -c 200)"; return $rc; }
+          lg "début étape VNC ($(sw_vers -productVersion), $(uname -m))"
+          PW=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 8 || true)
+          echo "::add-mask::$PW"; echo "VNC_PW=$PW" >> "$GITHUB_ENV"; lg "mot de passe généré (${#PW} car.)"
           K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
-          echo "kickstart…"; bounded sudo "$K" -activate -configure -access -on -restart -agent -privs -all -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" || true
-          echo "launchctl…"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
+          lg "kickstart"; bounded sudo "$K" -activate -configure -access -on -restart -agent -privs -all -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" || true
+          lg "launchctl"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           if [ -n "$SSH_KEY" ] && [ "$SSH_KEY" != "-" ]; then
             mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-            echo "ssh…"; bounded sudo systemsetup -setremotelogin on || true
+            lg "ssh"; bounded sudo systemsetup -setremotelogin on || true
           fi
           for i in $(seq 1 20); do nc -z 127.0.0.1 5900 && break; sleep 2; done
-          nc -z 127.0.0.1 5900 && echo "VNC en écoute" || { echo "::warning::VNC non joignable"; sudo lsof -iTCP -sTCP:LISTEN -P 2>/dev/null | head -8; }
+          if nc -z 127.0.0.1 5900; then lg "VNC en écoute"; else lg "VNC NON joignable"; lg "$(sudo lsof -iTCP -sTCP:LISTEN -P 2>/dev/null | awk '{print $1":"$9}' | tr '\n' ' ' | tail -c 250)"; fi
       - name: Prête
         run: |
           IP=$("$(brew --prefix)/bin/tailscale" ip -4)
