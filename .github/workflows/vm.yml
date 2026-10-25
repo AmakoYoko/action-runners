@@ -249,16 +249,9 @@ jobs:
           K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
           lg "kickstart"; bounded sudo "$K" -activate -configure -access -on -restart -agent -privs -all -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" || true
           bounded sudo "$K" -configure -allowAccessFor -allUsers -privs -all || true
-          # le serveur propose d'abord l'authentification Apple : on se connecte avec le compte de la session console (runner), sinon l'écran reste noir
-          lg "mot de passe runner"; bounded sudo dscl . -passwd /Users/runner "$PW" || true
-          # écran noir sinon : on empêche la mise en veille de l'écran et on le réveille
-          bounded sudo pmset -a displaysleep 0 sleep 0 disablesleep 1 || true
-          nohup caffeinate -dimsu >/dev/null 2>&1 &
-          caffeinate -u -t 5 || true
+          # le serveur propose d'abord l'authentification Apple (compte local + mot de passe) : on crée un compte dédié
+          lg "compte lamas"; bounded sudo sysadminctl -addUser lamas -fullName Lamas -password "$PW" -admin || true
           lg "launchctl"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
-          lg "diag console: $(stat -f %Su /dev/console) | $(who | tr '\n' ';') | $(pgrep -l loginwindow | tr '\n' ' ')"
-          lg "diag écrans: $(system_profiler SPDisplaysDataType 2>&1 | tr -s ' \n' ' ' | tail -c 350)"
-          sleep 5; sudo screencapture -x /tmp/diag.png 2>&1 | head -c 100; lg "diag capture: $(ls -l /tmp/diag.png 2>&1 | tail -c 80) $(sips -g pixelWidth -g pixelHeight /tmp/diag.png 2>&1 | tr '\n' ' ' | tail -c 90)"
           if [ -n "$SSH_KEY" ] && [ "$SSH_KEY" != "-" ]; then
             mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
             lg "ssh"; bounded sudo systemsetup -setremotelogin on || true
@@ -269,7 +262,7 @@ jobs:
         run: |
           IP=$("$(brew --prefix)/bin/tailscale" ip -4)
           curl -fsS -m 30 -X POST "$API/api/runner/ready" -H 'content-type: application/json' \
-            -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" --arg ip "$IP" --arg pw "$VNC_PW" '{vm_id:$v,token:$t,ip:$ip,rdpUser:"runner",rdpPass:$pw}')"
+            -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" --arg ip "$IP" --arg pw "$VNC_PW" '{vm_id:$v,token:$t,ip:$ip,rdpUser:"lamas",rdpPass:$pw}')"
       - name: Attendre l'échéance
         run: |
           while true; do
