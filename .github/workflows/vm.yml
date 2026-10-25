@@ -263,6 +263,10 @@ jobs:
           for RP in "" runner admin anka Anka password 1234 ; do
             if dscl . -authonly runner "$RP" >/dev/null 2>&1; then lg "mdp runner trouvé: [$RP]"; break; fi
           done
+          lg "reset1: $(sudo sysadminctl -resetPasswordFor runner -newPassword "$PW" 2>&1 | tr '\n' ' ' | tail -c 200)"
+          lg "authonly runner après reset1: $(dscl . -authonly runner "$PW" 2>&1 | head -c 80) [$?]"
+          lg "reset2: $(sudo sysadminctl -resetPasswordFor runner -newPassword "$PW" -adminUser runner -adminPassword '' 2>&1 | tr '\n' ' ' | tail -c 200)"
+          lg "authonly runner après reset2: $(dscl . -authonly runner "$PW" 2>&1 | head -c 80) [$?]"
           lg "authonly lamas: $(dscl . -authonly lamas "$PW" 2>&1 | head -c 80) rc=$?"
           lg "launchctl"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           if [ -n "$SSH_KEY" ] && [ "$SSH_KEY" != "-" ]; then
