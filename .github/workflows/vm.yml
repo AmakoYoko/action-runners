@@ -251,6 +251,10 @@ jobs:
           bounded sudo "$K" -configure -allowAccessFor -allUsers -privs -all || true
           # le serveur propose d'abord l'authentification Apple (compte local + mot de passe) : on crée un compte dédié
           lg "compte lamas"; bounded sudo sysadminctl -addUser lamas -fullName Lamas -password "$PW" -admin || true
+          # écran noir sinon : on empêche la mise en veille de l'écran et on le réveille
+          bounded sudo pmset -a displaysleep 0 sleep 0 disablesleep 1 || true
+          nohup caffeinate -dimsu >/dev/null 2>&1 &
+          caffeinate -u -t 5 || true
           lg "launchctl"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           if [ -n "$SSH_KEY" ] && [ "$SSH_KEY" != "-" ]; then
             mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
