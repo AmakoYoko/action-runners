@@ -39,6 +39,7 @@ jobs:
           echo "::add-mask::$AUTHKEY"; echo "::add-mask::$TOKEN"
           echo "TOKEN=$TOKEN" >> "$GITHUB_ENV"
           echo "EXPIRES_AT=$(jq -r .expiresAt <<<"$J")" >> "$GITHUB_ENV"
+          [ "$(jq -r .successor <<<"$J")" = "true" ] && echo "SUCC=1" >> "$GITHUB_ENV" || true
           curl -fsSL https://tailscale.com/install.sh -o /tmp/ts.sh && sudo sh /tmp/ts.sh >/dev/null
           sudo tailscale up --login-server "$(jq -r .server <<<"$J")" --authkey "$AUTHKEY" \
             --hostname "$VM_HOST" --accept-routes --accept-dns=false
@@ -46,7 +47,7 @@ jobs:
       - name: SSH
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          mkdir -p ~/.ssh ~/work && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
           sudo systemctl start ssh || sudo service ssh start
       - name: Image du profil
@@ -61,7 +62,7 @@ jobs:
             echo "::warning::image $IMAGE indisponible, repli sur le runner nu"
           fi
       - name: Application
-        if: ${{ inputs.app != '' }}
+        if: ${{ inputs.app != '' && env.SUCC != '1' }}
         run: |
           set -euo pipefail
           [[ "$APP" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(@[A-Za-z0-9._/-]+)?$ ]] || { echo "app invalide"; exit 1; }
@@ -69,7 +70,25 @@ jobs:
           git clone --depth 1 ${REF:+-b "$REF"} "https://github.com/$REPO" "$HOME/work/app"
           cd "$HOME/work/app"
           if [ -f compose.yaml ] || [ -f docker-compose.yml ]; then docker compose up -d --build; elif [ -x deploy.sh ]; then ./deploy.sh; fi
+      - name: Reprise depuis la VM précédente
+        if: env.SUCC == '1'
+        run: |
+          set -euo pipefail
+          call() { curl -fsS -m 20 -X POST "$API/api/runner/$1" -H 'content-type: application/json' -d "$2"; }
+          body() { jq -nc --arg v "$VM_ID" --arg t "$TOKEN" "$@"; }
+          ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/handoff
+          call ready "$(body --arg ip "$(tailscale ip -4)" --arg pk "$(cut -d' ' -f1,2 ~/.ssh/handoff.pub)" '{vm_id:$v,token:$t,ip:$ip,pubkey:$pk}')" >/dev/null
+          wait_hand() { for _ in $(seq 1 90); do R=$(call poll "$(body '{vm_id:$v,token:$t}')"); [ "$(jq -r .hand <<<"$R")" = "$1" ] && { PEER=$(jq -r .peerIp <<<"$R"); return 0; }; sleep 4; done; echo "délai dépassé ($1)"; return 1; }
+          wait_hand authorized
+          RS="rsync -a --delete -e 'ssh -i $HOME/.ssh/handoff -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15'"
+          eval $RS "runner@$PEER:work/" "$HOME/work/"
+          call handoff "$(body '{vm_id:$v,token:$t,stage:"pass1"}')" >/dev/null
+          wait_hand frozen
+          eval $RS "runner@$PEER:work/" "$HOME/work/"
+          for f in "$HOME/work/app/compose.yaml" "$HOME/work/app/docker-compose.yml"; do [ -f "$f" ] && (cd "$HOME/work/app" && docker compose up -d) && break; done || true
+          call handoff "$(body '{vm_id:$v,token:$t,stage:"synced"}')" >/dev/null
       - name: Prête
+        if: env.SUCC != '1'
         run: |
           IP=$(tailscale ip -4)
           curl -fsS -m 30 -X POST "$API/api/runner/ready" -H 'content-type: application/json' \
@@ -80,7 +99,17 @@ jobs:
             R=$(curl -fsS -m 20 -X POST "$API/api/runner/poll" -H 'content-type: application/json' \
               -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" '{vm_id:$v,token:$t}')" || echo '{}')
             [ "$(jq -r '.stop // false' <<<"$R")" = "true" ] && break
-            sleep 30
+            A=$(jq -r '.authorize // empty' <<<"$R")
+            if [ -n "$A" ] && [ ! -f /tmp/h_auth ]; then
+              echo "from=\"100.64.0.0/10\" $A" >> ~/.ssh/authorized_keys; touch /tmp/h_auth
+              curl -fsS -m 20 -X POST "$API/api/runner/handoff" -H 'content-type: application/json' -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" '{vm_id:$v,token:$t,stage:"authorized"}')" >/dev/null
+            fi
+            if [ "$(jq -r '.freeze // false' <<<"$R")" = "true" ] && [ ! -f /tmp/h_frozen ]; then
+              (cd ~/work/app 2>/dev/null && docker compose stop) || true
+              docker ps -q | xargs -r docker stop >/dev/null || true; touch /tmp/h_frozen
+              curl -fsS -m 20 -X POST "$API/api/runner/handoff" -H 'content-type: application/json' -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" '{vm_id:$v,token:$t,stage:"frozen"}')" >/dev/null
+            fi
+            sleep 8
           done
       - name: Nettoyage
         if: always()
