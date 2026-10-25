@@ -1,0 +1,25 @@
+name: images
+on:
+  push:
+    branches: [main]
+    paths: ["images/**", ".github/workflows/images.yml"]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        name: [node, python]
+    steps:
+      - run: git clone --depth 1 "https://github.com/${{ github.repository }}" src
+      - env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker build -t ghcr.io/amakoyoko/action-${{ matrix.name }}:latest src/images/${{ matrix.name }}
+          docker push ghcr.io/amakoyoko/action-${{ matrix.name }}:latest
