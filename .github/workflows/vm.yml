@@ -221,6 +221,16 @@ jobs:
       VM_HOST: ${{ inputs.hostname }}
       RUN_ID: ${{ github.run_id }}
     steps:
+      - name: Garder la session déverrouillée
+        run: |
+          # la session console se verrouille (mot de passe inconnu) : on supprime veille et verrouillage dès le départ
+          defaults write com.apple.screensaver askForPassword -int 0
+          defaults write com.apple.screensaver askForPasswordDelay -int 0
+          defaults -currentHost write com.apple.screensaver idleTime -int 0
+          sudo pmset -a displaysleep 0 sleep 0 disablesleep 1 || true
+          nohup caffeinate -dimsu >/dev/null 2>&1 &
+          caffeinate -u -t 3 || true
+          echo "verrou au départ: $(ioreg -n Root -d1 -a | grep -A1 CGSSessionScreenIsLocked | tr -d ' \n\t' | head -c 80)"
       - name: Rejoindre le réseau Lamas
         run: |
           set -eo pipefail
@@ -243,6 +253,7 @@ jobs:
           lg() { curl -fsS -m 10 -X POST "$API/api/runner/log" -H 'content-type: application/json' -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" --arg l "$1" '{vm_id:$v,token:$t,line:$l}')" >/dev/null 2>&1 || true; }
           # macOS n'a pas `timeout` : chaque commande système est bornée à 40 s (elles peuvent attendre une autorisation)
           bounded() { perl -e 'alarm shift; exec @ARGV' 40 "$@" >/tmp/bounded.log 2>&1; local rc=$?; lg "rc=$rc $(tr '\n' ' ' </tmp/bounded.log | tail -c 200)"; return $rc; }
+          lg "verrou: $(ioreg -n Root -d1 -a | grep -A1 CGSSessionScreenIsLocked | tr -d ' \n\t' | head -c 80) $(ioreg -n IOHIDSystem | grep HIDIdleTime | head -c 60)"
           lg "début étape VNC ($(sw_vers -productVersion), $(uname -m))"
           PW=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | cut -c1-8)
           echo "::add-mask::$PW"; echo "VNC_PW=$PW" >> "$GITHUB_ENV"; lg "mot de passe généré (${#PW} car.)"
