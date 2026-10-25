@@ -50,6 +50,9 @@ jobs:
           mkdir -p ~/.ssh ~/work && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
           sudo systemctl start ssh || sudo service ssh start
+          # session durable : reconnexion = même session tmux (interactif uniquement)
+          (sudo apt-get install -y -qq tmux >/dev/null 2>&1 || true)
+          grep -q 'tmux new-session' ~/.bashrc || printf '%s\n' 'if [ -n "$SSH_CONNECTION" ] && [ -z "$TMUX" ] && command -v tmux >/dev/null; then exec tmux new-session -A -s main; fi' >> ~/.bashrc
       - name: Image du profil
         if: ${{ inputs.image != '' }}
         env:
@@ -82,9 +85,14 @@ jobs:
           wait_hand authorized
           RS="rsync -a --delete -e 'ssh -i $HOME/.ssh/handoff -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15'"
           eval $RS "runner@$PEER:work/" "$HOME/work/"
+          eval $RS "runner@$PEER:work/" "$HOME/work/"   # 2e passe à chaud : le gel final ne copie plus que le delta
+          if [ -d "$HOME/work/app" ]; then (cd "$HOME/work/app" && { docker compose pull -q --ignore-pull-failures; docker compose build -q; }) 2>/dev/null || true; fi
           call handoff "$(body '{vm_id:$v,token:$t,stage:"pass1"}')" >/dev/null
           wait_hand frozen
           eval $RS "runner@$PEER:work/" "$HOME/work/"
+          # identité SSH de la VM précédente (pas d'alerte de clé) et volumes Docker nommés
+          if ls "$HOME"/work/.handoff/ssh/ssh_host_* >/dev/null 2>&1; then sudo cp "$HOME"/work/.handoff/ssh/ssh_host_* /etc/ssh/ && sudo chmod 600 /etc/ssh/ssh_host_*_key && sudo systemctl restart ssh || true; fi
+          for f in "$HOME"/work/.handoff/vol/*.tgz; do [ -f "$f" ] || continue; n=$(basename "$f" .tgz); docker volume create "$n" >/dev/null; sudo tar xzf "$f" -C "/var/lib/docker/volumes/$n/_data"; done
           for f in "$HOME/work/app/compose.yaml" "$HOME/work/app/docker-compose.yml"; do [ -f "$f" ] && (cd "$HOME/work/app" && docker compose up -d) && break; done || true
           call handoff "$(body '{vm_id:$v,token:$t,stage:"synced"}')" >/dev/null
       - name: Prête
@@ -105,8 +113,12 @@ jobs:
               curl -fsS -m 20 -X POST "$API/api/runner/handoff" -H 'content-type: application/json' -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" '{vm_id:$v,token:$t,stage:"authorized"}')" >/dev/null
             fi
             if [ "$(jq -r '.freeze // false' <<<"$R")" = "true" ] && [ ! -f /tmp/h_frozen ]; then
-              (cd ~/work/app 2>/dev/null && docker compose stop) || true
-              docker ps -q | xargs -r docker stop >/dev/null || true; touch /tmp/h_frozen
+              (cd ~/work/app 2>/dev/null && docker compose stop -t 10) || true
+              docker ps -q | xargs -r docker stop -t 10 >/dev/null || true
+              H=~/work/.handoff; rm -rf "$H"; mkdir -p "$H/ssh" "$H/vol"
+              sudo cp /etc/ssh/ssh_host_* "$H/ssh/" && sudo chown -R "$USER" "$H/ssh"
+              for v in $(docker volume ls -q); do sudo tar czf "$H/vol/$v.tgz" -C "/var/lib/docker/volumes/$v/_data" . 2>/dev/null || true; done
+              sudo chown -R "$USER" "$H"; touch /tmp/h_frozen
               curl -fsS -m 20 -X POST "$API/api/runner/handoff" -H 'content-type: application/json' -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" '{vm_id:$v,token:$t,stage:"frozen"}')" >/dev/null
             fi
             sleep 8
