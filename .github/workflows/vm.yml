@@ -1,0 +1,86 @@
+name: vm
+run-name: vm ${{ inputs.vm_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      vm_id: { description: "Identifiant VM", required: true }
+      ticket: { description: "Ticket à usage unique", required: true }
+      profile: { description: "Profil", required: true }
+      image: { description: "Image conteneur (optionnel)", required: false, default: "" }
+      minutes: { description: "Durée (min, max 300)", required: true, default: "60" }
+      ssh_key: { description: "Clé SSH publique", required: true }
+      hostname: { description: "Nom d'hôte", required: true }
+      app: { description: "owner/repo[@ref] à déployer (optionnel)", required: false, default: "" }
+permissions: {}
+concurrency:
+  group: vm-${{ inputs.vm_id }}
+jobs:
+  vm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      API: https://action.lamas.one
+      VM_ID: ${{ inputs.vm_id }}
+      TICKET: ${{ inputs.ticket }}
+      IMAGE: ${{ inputs.image }}
+      SSH_KEY: ${{ inputs.ssh_key }}
+      VM_HOST: ${{ inputs.hostname }}
+      APP: ${{ inputs.app }}
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Rejoindre le réseau Lamas
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$TICKET"
+          J=$(curl -fsS -m 30 -X POST "$API/api/runner/join" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg v "$VM_ID" --arg t "$TICKET" --argjson r "$RUN_ID" '{vm_id:$v,ticket:$t,run_id:$r}')")
+          AUTHKEY=$(jq -r .authkey <<<"$J"); TOKEN=$(jq -r .token <<<"$J")
+          echo "::add-mask::$AUTHKEY"; echo "::add-mask::$TOKEN"
+          echo "TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "EXPIRES_AT=$(jq -r .expiresAt <<<"$J")" >> "$GITHUB_ENV"
+          curl -fsSL https://tailscale.com/install.sh -o /tmp/ts.sh && sudo sh /tmp/ts.sh >/dev/null
+          sudo tailscale up --login-server "$(jq -r .server <<<"$J")" --authkey "$AUTHKEY" \
+            --hostname "$VM_HOST" --accept-routes --accept-dns=false
+          tailscale ip -4
+      - name: SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+          sudo systemctl start ssh || sudo service ssh start
+      - name: Image du profil
+        if: ${{ inputs.image != '' }}
+        run: |
+          if docker pull "$IMAGE"; then
+            docker run -d --name work --network host --restart no -v "$HOME/work:/work" -w /work "$IMAGE" sleep infinity
+          else
+            echo "::warning::image $IMAGE indisponible, repli sur le runner nu"
+          fi
+      - name: Application
+        if: ${{ inputs.app != '' }}
+        run: |
+          set -euo pipefail
+          [[ "$APP" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(@[A-Za-z0-9._/-]+)?$ ]] || { echo "app invalide"; exit 1; }
+          REPO=${APP%%@*}; REF=${APP#*@}; [ "$REF" = "$APP" ] && REF=""
+          git clone --depth 1 ${REF:+-b "$REF"} "https://github.com/$REPO" "$HOME/work/app"
+          cd "$HOME/work/app"
+          if [ -f compose.yaml ] || [ -f docker-compose.yml ]; then docker compose up -d --build; elif [ -x deploy.sh ]; then ./deploy.sh; fi
+      - name: Prête
+        run: |
+          IP=$(tailscale ip -4)
+          curl -fsS -m 30 -X POST "$API/api/runner/ready" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" --arg ip "$IP" '{vm_id:$v,token:$t,ip:$ip}')"
+      - name: Attendre l'échéance
+        run: |
+          while true; do
+            R=$(curl -fsS -m 20 -X POST "$API/api/runner/poll" -H 'content-type: application/json' \
+              -d "$(jq -nc --arg v "$VM_ID" --arg t "$TOKEN" '{vm_id:$v,token:$t}')" || echo '{}')
+            [ "$(jq -r '.stop // false' <<<"$R")" = "true" ] && break
+            sleep 30
+          done
+      - name: Nettoyage
+        if: always()
+        run: |
+          curl -fsS -m 20 -X POST "$API/api/runner/done" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg v "$VM_ID" --arg t "${TOKEN:-}" '{vm_id:$v,token:$t}')" || true
+          sudo tailscale logout || true
