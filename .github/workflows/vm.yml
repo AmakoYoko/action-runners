@@ -11,12 +11,14 @@ on:
       ssh_key: { description: "Clé SSH publique", required: true }
       hostname: { description: "Nom d'hôte", required: true }
       app: { description: "owner/repo[@ref] à déployer (optionnel)", required: false, default: "" }
+      os: { description: "linux ou windows", required: false, default: "linux" }
 permissions:
   packages: read
 concurrency:
   group: vm-${{ inputs.vm_id }}
 jobs:
   vm:
+    if: ${{ inputs.os != 'windows' }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
@@ -40,6 +42,7 @@ jobs:
           echo "TOKEN=$TOKEN" >> "$GITHUB_ENV"
           echo "EXPIRES_AT=$(jq -r .expiresAt <<<"$J")" >> "$GITHUB_ENV"
           [ "$(jq -r .successor <<<"$J")" = "true" ] && echo "SUCC=1" >> "$GITHUB_ENV" || true
+          jq -c '{env:(.env//{}),setup:(.setup//"")}' <<<"$J" > "$RUNNER_TEMP/profile.json"
           curl -fsSL https://tailscale.com/install.sh -o /tmp/ts.sh && sudo sh /tmp/ts.sh >/dev/null
           sudo tailscale up --login-server "$(jq -r .server <<<"$J")" --authkey "$AUTHKEY" \
             --hostname "$VM_HOST" --accept-routes --accept-dns=false
@@ -66,6 +69,15 @@ jobs:
           else
             echo "::warning::image $IMAGE indisponible, repli sur le runner nu"
           fi
+      - name: Configuration du profil
+        run: |
+          set -euo pipefail
+          P="$RUNNER_TEMP/profile.json"
+          jq -r '.env|to_entries[]|.value' "$P" | while IFS= read -r v; do [ -n "$v" ] && echo "::add-mask::$v"; done || true
+          jq -r '.env|to_entries[]|"export \(.key)=\(.value|@sh)"' "$P" > "$HOME/.action-env"; chmod 600 "$HOME/.action-env"
+          grep -q action-env ~/.bashrc || echo '[ -f ~/.action-env ] && . ~/.action-env' >> ~/.bashrc
+          . "$HOME/.action-env"
+          S=$(jq -r .setup "$P"); [ -n "$S" ] && bash -c "$S" || true
       - name: Application
         if: ${{ inputs.app != '' && env.SUCC != '1' }}
         run: |
@@ -131,3 +143,68 @@ jobs:
           curl -fsS -m 20 -X POST "$API/api/runner/done" -H 'content-type: application/json' \
             -d "$(jq -nc --arg v "$VM_ID" --arg t "${TOKEN:-}" '{vm_id:$v,token:$t}')" || true
           sudo tailscale logout || true
+
+  windows:
+    if: ${{ inputs.os == 'windows' }}
+    runs-on: windows-latest
+    timeout-minutes: 330
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      API: https://action.lamas.one
+      VM_ID: ${{ inputs.vm_id }}
+      TICKET: ${{ inputs.ticket }}
+      VM_HOST: ${{ inputs.hostname }}
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Rejoindre le réseau Lamas
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Output "::add-mask::$env:TICKET"
+          $body = @{ vm_id = $env:VM_ID; ticket = $env:TICKET; run_id = [int64]$env:RUN_ID } | ConvertTo-Json
+          $j = Invoke-RestMethod -Method Post -Uri "$env:API/api/runner/join" -ContentType 'application/json' -Body $body -TimeoutSec 30
+          Write-Output "::add-mask::$($j.authkey)"; Write-Output "::add-mask::$($j.token)"
+          "TOKEN=$($j.token)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $m = Invoke-RestMethod 'https://pkgs.tailscale.com/stable/?mode=json'
+          $msi = Join-Path $env:RUNNER_TEMP 'ts.msi'
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/$($m.MSIs.amd64)" -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /quiet /norestart TS_NOLAUNCH=1" -Wait
+          $ts = 'C:\Program Files\Tailscale\tailscale.exe'
+          for ($i = 0; $i -lt 30 -and -not (Get-Service Tailscale -ErrorAction SilentlyContinue | Where-Object Status -eq 'Running'); $i++) { Start-Sleep 2 }
+          & $ts up --login-server $j.server --authkey $j.authkey --hostname $env:VM_HOST --unattended --accept-dns=false --accept-routes
+          & $ts ip -4
+      - name: Bureau à distance (RDP)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+          Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue
+          New-NetFirewallRule -DisplayName 'RDP tailnet' -Direction Inbound -Protocol TCP -LocalPort 3389 -RemoteAddress 100.64.0.0/10 -Action Allow | Out-Null
+          Set-Service TermService -StartupType Automatic; Start-Service TermService
+          $pw = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 20 | ForEach-Object { [char]$_ })
+          Write-Output "::add-mask::$pw"
+          net user runneradmin $pw | Out-Null
+          "RDP_PW=$pw" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Prête
+        run: |
+          $ip = (& 'C:\Program Files\Tailscale\tailscale.exe' ip -4).Trim()
+          $body = @{ vm_id = $env:VM_ID; token = $env:TOKEN; ip = $ip; rdpUser = 'runneradmin'; rdpPass = $env:RDP_PW } | ConvertTo-Json
+          Invoke-RestMethod -Method Post -Uri "$env:API/api/runner/ready" -ContentType 'application/json' -Body $body -TimeoutSec 30 | Out-Null
+      - name: Attendre l'échéance
+        run: |
+          while ($true) {
+            try {
+              $body = @{ vm_id = $env:VM_ID; token = $env:TOKEN } | ConvertTo-Json
+              $r = Invoke-RestMethod -Method Post -Uri "$env:API/api/runner/poll" -ContentType 'application/json' -Body $body -TimeoutSec 20
+              if ($r.stop) { break }
+            } catch { }
+            Start-Sleep 10
+          }
+      - name: Nettoyage
+        if: always()
+        run: |
+          try {
+            $body = @{ vm_id = $env:VM_ID; token = "$env:TOKEN" } | ConvertTo-Json
+            Invoke-RestMethod -Method Post -Uri "$env:API/api/runner/done" -ContentType 'application/json' -Body $body -TimeoutSec 20 | Out-Null
+          } catch { }
+          & 'C:\Program Files\Tailscale\tailscale.exe' logout 2>$null
