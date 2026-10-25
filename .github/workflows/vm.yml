@@ -263,13 +263,6 @@ jobs:
           for RP in "" runner admin anka Anka password 1234 ; do
             if dscl . -authonly runner "$RP" >/dev/null 2>&1; then lg "mdp runner trouvé: [$RP]"; break; fi
           done
-          # le compte de la session console (runner) a un mot de passe inconnu : sans lui l'écran reste verrouillé. On retire sa marque SecureToken (SIP désactivé) pour pouvoir le changer
-          lg "aa avant: $(sudo dscl . -read /Users/runner AuthenticationAuthority 2>&1 | tr '\n' ' ' | cut -c1-200)"
-          lg "del token: $(sudo dscl . -delete /Users/runner AuthenticationAuthority ';SecureToken;' 2>&1 | head -c 120)"
-          lg "passwd: $(sudo dscl . -passwd /Users/runner "$PW" 2>&1 | head -c 120)"
-          lg "authonly runner: $(dscl . -authonly runner "$PW" 2>&1 | head -c 60) [$?]"
-          lg "aa après: $(sudo dscl . -read /Users/runner AuthenticationAuthority 2>&1 | tr '\n' ' ' | cut -c1-200)"
-          lg "authonly lamas: $(dscl . -authonly lamas "$PW" 2>&1 | head -c 80) rc=$?"
           lg "launchctl"; bounded sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
           if [ -n "$SSH_KEY" ] && [ "$SSH_KEY" != "-" ]; then
             mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
